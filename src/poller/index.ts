@@ -106,7 +106,7 @@ async function processSubmissions(username: string): Promise<void> {
             lang         : sub.lang,
             solvedAt,
             contestRating: rating,
-          }).catch((err) => console.error("[Discord] Notification failed:", err));
+          }).catch((err: unknown) => console.error("[Discord] Notification failed:", err));
         }
       }
     } catch (err) {
@@ -151,7 +151,7 @@ async function processRating(username: string): Promise<void> {
           username,
           oldRating: lastRating,
           newRating: rating.rating,
-        }).catch((err) => console.error("[Discord] Rating notification failed:", err));
+        }).catch((err: unknown) => console.error("[Discord] Rating notification failed:", err));
       }
     }
   } catch (err) {
