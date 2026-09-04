@@ -2,11 +2,11 @@ import cron from "node-cron";
 import { pool } from "../db/client";
 import { getRecentAcSubmissions, getContestRating } from "../leetcode/queries";
 import { getFollowingList } from "../leetcode/following";
-import { notifyNewSolve, notifyRatingChange, isTelegramConfigured } from "../notifications/telegram";
+import { notifyNewSolve, notifyRatingChange, isDiscordConfigured } from "../notifications/discord";
 
-const POLL_CRON          = process.env.POLL_CRON           ?? "*/5 * * * *";
-const SYNC_FOLLOWING_CRON = process.env.SYNC_FOLLOWING_CRON ?? "*/30 * * * *";
-const MY_USERNAME        = process.env.MY_LEETCODE_USERNAME ?? "";
+const POLL_CRON           = process.env.POLL_CRON            ?? "*/5 * * * *";
+const SYNC_FOLLOWING_CRON = process.env.SYNC_FOLLOWING_CRON  ?? "*/30 * * * *";
+const MY_USERNAME         = process.env.MY_LEETCODE_USERNAME  ?? "";
 
 // ─── Following list sync ──────────────────────────────────────────────────────
 
@@ -85,14 +85,12 @@ async function processSubmissions(username: string): Promise<void> {
       );
 
       if (result.rowCount && result.rowCount > 0) {
-        // ✅ New solve detected — log it
         console.log(
           `[Poller] 🆕 ${username} solved "${sub.title}" (${sub.lang}) at ${solvedAt.toISOString()}`
         );
 
-        // 📬 Send Telegram notification
-        if (isTelegramConfigured()) {
-          // Fetch latest rating to include in the notification
+        // 📬 Send Discord notification
+        if (isDiscordConfigured()) {
           const latestRating = await pool.query<{ rating: string }>(
             `SELECT rating FROM rating_snapshots WHERE username = $1 ORDER BY snapshotted_at DESC LIMIT 1`,
             [username]
@@ -108,7 +106,7 @@ async function processSubmissions(username: string): Promise<void> {
             lang         : sub.lang,
             solvedAt,
             contestRating: rating,
-          }).catch((err) => console.error("[Telegram] Notification failed:", err));
+          }).catch((err) => console.error("[Discord] Notification failed:", err));
         }
       }
     } catch (err) {
@@ -128,7 +126,7 @@ async function processRating(username: string): Promise<void> {
     return;
   }
 
-  if (rating.rating === null) return; // Never entered a contest
+  if (rating.rating === null) return;
 
   try {
     const last = await pool.query<{ rating: string }>(
@@ -136,11 +134,9 @@ async function processRating(username: string): Promise<void> {
       [username]
     );
     const lastRating = last.rows[0] ? parseFloat(last.rows[0].rating) : null;
-
     const ratingChanged = lastRating === null || Math.abs(lastRating - rating.rating) > 0.001;
 
     if (ratingChanged) {
-      // Store new snapshot in DB
       await pool.query(
         `INSERT INTO rating_snapshots (username, rating, global_ranking, contests_attended, top_percentage)
          VALUES ($1, $2, $3, $4, $5)`,
@@ -149,13 +145,13 @@ async function processRating(username: string): Promise<void> {
 
       console.log(`[Poller] 📊 ${username} rating: ${lastRating ?? "N/A"} → ${Math.round(rating.rating)}`);
 
-      // 📬 Send Telegram notification for rating change
-      if (isTelegramConfigured()) {
+      // 📬 Send Discord notification for rating change
+      if (isDiscordConfigured()) {
         notifyRatingChange({
           username,
           oldRating: lastRating,
           newRating: rating.rating,
-        }).catch((err) => console.error("[Telegram] Rating notification failed:", err));
+        }).catch((err) => console.error("[Discord] Rating notification failed:", err));
       }
     }
   } catch (err) {
@@ -177,38 +173,34 @@ async function pollAll(): Promise<void> {
   }
 
   console.log(`[Poller] Polling ${users.length} followed user(s)...`);
-
   for (const username of users) {
     await processSubmissions(username);
     await processRating(username);
   }
-
   console.log("[Poller] Poll cycle complete.");
 }
 
-// ─── Startup ──────────────────────────────────────────────────────────────────
+// ─── Startup ─────────────────────────────────────────────────────────────────
 
 export function startPoller(): void {
-  if (!isTelegramConfigured()) {
+  if (!isDiscordConfigured()) {
     console.warn(
-      "[Poller] ⚠️  TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — " +
+      "[Poller] ⚠️  DISCORD_WEBHOOK_URL not set — " +
       "notifications are disabled. Data will still be stored in the DB."
     );
   }
 
-  // 1. Sync following list immediately, then on schedule
-  console.log(`[Sync] Following list sync schedule: "${SYNC_FOLLOWING_CRON}"`);
+  console.log(`[Sync]   Following list sync schedule: "${SYNC_FOLLOWING_CRON}"`);
   syncFollowingList()
-    .then(() => pollAll())                                          // poll immediately after first sync
+    .then(() => pollAll())
     .catch((err) => console.error("[Startup] Initial sync error:", err));
 
   cron.schedule(SYNC_FOLLOWING_CRON, () => {
-    syncFollowingList().catch((err) => console.error("[Sync] Sync error:", err));
+    syncFollowingList().catch((err) => console.error("[Sync] error:", err));
   });
 
-  // 2. Poll submissions + ratings on schedule
   console.log(`[Poller] Submission poll schedule: "${POLL_CRON}"`);
   cron.schedule(POLL_CRON, () => {
-    pollAll().catch((err) => console.error("[Poller] Poll error:", err));
+    pollAll().catch((err) => console.error("[Poller] error:", err));
   });
 }
