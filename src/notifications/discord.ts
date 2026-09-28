@@ -3,7 +3,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL ?? "";
 /**
  * Send a message to your Discord channel via webhook.
  */
-async function sendDiscordMessage(content: string, embeds?: object[]): Promise<void> {
+async function sendDiscordMessage(content: string, embeds?: object[], retries = 3): Promise<void> {
   if (!DISCORD_WEBHOOK_URL) return;
 
   const body: any = {};
@@ -13,15 +13,31 @@ async function sendDiscordMessage(content: string, embeds?: object[]): Promise<v
     body.content = content;
   }
 
-  const res = await fetch(DISCORD_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(DISCORD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("[Discord] Failed to send message:", text);
+    if (res.status === 429) {
+      try {
+        const json = (await res.json()) as any;
+        const retryAfter = (json.retry_after ?? 0.5) * 1000;
+        console.warn(`[Discord] Rate limited, waiting ${retryAfter}ms before retry...`);
+        await new Promise((r) => setTimeout(r, retryAfter + 200));
+        continue;
+      } catch {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+    }
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("[Discord] Failed to send message:", text);
+    }
+    return;
   }
 }
 
